@@ -1,4 +1,4 @@
-name: 生日提醒推送（企业微信群）
+name: 生日提醒（同步千翕 + 企业微信群推送）
 
 on:
   schedule:
@@ -16,6 +16,14 @@ on:
         description: '模拟日期 YYYY-MM-DD（留空 = 今天）'
         required: false
         default: ''
+      sync_dry:
+        description: '同步只预览不写入（填 true 只看差异）'
+        required: false
+        default: 'false'
+      skip_sync:
+        description: '跳过千翕同步（填 true 只跑推送）'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write
@@ -35,6 +43,30 @@ jobs:
         with:
           python-version: '3.11'
 
+      # 第 1 步：把千翕系统里的客户生日同步进日历（新增 / 更正）
+      # 用 continue-on-error：同步万一失败，也不影响后面的推送照常发
+      - name: 同步千翕客户生日
+        id: sync
+        continue-on-error: true
+        timeout-minutes: 40
+        if: github.event.inputs.skip_sync != 'true'
+        env:
+          QX_USER: ${{ secrets.QX_USER }}
+          QX_PWD: ${{ secrets.QX_PWD }}
+          EDIT_KEY: ${{ secrets.EDIT_KEY }}
+        run: |
+          if [ -z "$QX_USER" ] || [ -z "$QX_PWD" ] || [ -z "$EDIT_KEY" ]; then
+            echo "未配置千翕账号或日历口令，跳过同步（不影响推送）。"
+            exit 0
+          fi
+          ARGS=""
+          if [ "${{ github.event.inputs.sync_dry }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          echo "同步参数: $ARGS"
+          python sync_members.py $ARGS
+
+      # 第 2 步：把今天命中的生日推送到企业微信群
       - name: 运行推送
         env:
           WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
