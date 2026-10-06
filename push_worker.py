@@ -17,7 +17,7 @@
                       https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx）
   WB_ACCESS_KEY       共享日历云端读取密钥（可选，不填用默认值）
 """
-import sys, os, json, argparse, urllib.request, urllib.error, datetime
+import sys, os, json, argparse, urllib.request, urllib.error, datetime, time
 
 ENDPOINT = "https://lunar-reminder.app.workbuddy.host"
 ACCESS_KEY = os.environ.get(
@@ -119,6 +119,23 @@ dayCN = ["初一","初二","初三","初四","初五","初六","初七","初八"
 def lunarText(lm, ld, isLeap):
     return ("闰" if isLeap else "") + monthCN[lm-1] + dayCN[ld-1]
 
+# ===== 网络请求：带自动重试 =====
+# 为什么需要：GitHub 的服务器在国外，连国内网站偶尔会握手超时。
+# 重试几次就不会因为一次网络抖动而整个任务失败。
+def _fetch(req, timeout=60, tries=3, label=""):
+    last = None
+    for i in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8")
+        except Exception as e:
+            last = e
+            if i < tries - 1:
+                wait = 5 * (i + 1)
+                print("  [重试] %s 第 %d 次失败：%s；%d 秒后再试…" % (label, i + 1, e, wait))
+                time.sleep(wait)
+    raise last
+
 # ===== 云端读取（公开读，带访问密钥头） =====
 def cloud_get(path, params=""):
     url = ENDPOINT + "/.cloud/database/rest/" + path + (("?" + params) if params else "")
@@ -127,10 +144,9 @@ def cloud_get(path, params=""):
         "Content-Type": "application/json",
         "Accept": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read().decode("utf-8"))
+    return json.loads(_fetch(req, 60, 4, "读取 " + path))
 
-def cloud_rpc(func, params):
+def cloud_rpc(func, params, tries=2):
     url = ENDPOINT + "/.cloud/database/rest/rpc/" + func
     data = json.dumps(params).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST", headers={
@@ -138,8 +154,7 @@ def cloud_rpc(func, params):
         "Content-Type": "application/json",
         "Accept": "application/json",
     })
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return r.read().decode("utf-8")
+    return _fetch(req, 60, tries, "调用 " + func)
 
 def nextOccurrence(r, today):
     """算出这条提醒「下一次」发生（含今天）的公历日期"""
@@ -167,14 +182,23 @@ def nextOccurrence(r, today):
 def wework_send(webhook, content):
     payload = {"msgtype": "markdown", "markdown": {"content": content}}
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(webhook, data=data, method="POST", headers={
-        "Content-Type": "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=20) as r:
-        resp = json.loads(r.read().decode("utf-8"))
-    if resp.get("errcode") != 0:
-        raise RuntimeError("企业微信返回错误: %s" % resp)
-    return resp
+    last = None
+    for i in range(2):
+        req = urllib.request.Request(webhook, data=data, method="POST", headers={
+            "Content-Type": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                resp = json.loads(r.read().decode("utf-8"))
+            if resp.get("errcode") != 0:
+                raise RuntimeError("企业微信返回错误: %s" % resp)
+            return resp
+        except Exception as e:
+            last = e
+            if i == 0:
+                print("  [重试] 发送失败：%s；5 秒后再试一次…" % e)
+                time.sleep(5)
+    raise last
 
 def build_message(due, sent, today):
     """due: [(r, date, ly, off)] → (标题行文本, 消息 markdown, 待记录列表)"""
