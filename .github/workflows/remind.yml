@@ -1,0 +1,68 @@
+name: 生日提醒推送（企业微信群）
+
+on:
+  schedule:
+    # 时间用 UTC 写：UTC 01:00 = 北京时间 09:00
+    - cron: '0 1 * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只预览不发送（填 true 则不发）'
+        required: false
+        default: 'false'
+      date:
+        description: '模拟日期 YYYY-MM-DD（留空 = 今天）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 运行推送
+        env:
+          WEWORK_WEBHOOK_URL: ${{ secrets.WEWORK_WEBHOOK_URL }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            ARGS="$ARGS --date ${{ github.event.inputs.date }}"
+          fi
+          echo "运行参数: $ARGS"
+          python push_worker.py $ARGS
+
+      - name: 保活（每月 1 号提交一次，避免仓库长期无活动被 GitHub 停用定时任务）
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +%d)" = "01" ]; then
+            date -u '+%Y-%m-%d %H:%M UTC' > heartbeat.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add heartbeat.txt
+            if git diff --staged --quiet; then
+              echo "无变化，跳过"
+            else
+              git commit -m "保活 $(date -u '+%Y-%m')"
+              git push
+            fi
+          else
+            echo "非 1 号，跳过保活"
+          fi
