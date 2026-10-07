@@ -9,13 +9,14 @@
   3. 汇总成 1 条消息，通过企业微信群机器人发到指定群
   4. 记录已发送，避免同一天重复推送
 
-运行环境：GitHub Actions（每天北京时间 09:00 自动跑），也可本地手动跑。
+运行环境：GitHub Actions（每天北京时间 09:07 自动跑），也可本地手动跑。
 只依赖 Python 标准库，无需安装任何第三方包。
 
 环境变量：
   WEWORK_WEBHOOK_URL  企业微信群机器人 Webhook 地址（必填，形如
                       https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx）
   WB_ACCESS_KEY       共享日历云端读取密钥（可选，不填用默认值）
+  CALENDAR_URL        消息末尾附上的日历网页链接（可选，不填用默认值）
 """
 import sys, os, json, argparse, urllib.request, urllib.error, datetime, time
 
@@ -24,6 +25,8 @@ ACCESS_KEY = os.environ.get(
     "WB_ACCESS_KEY",
     "wbpk_UsSYCeH8Cpd3mfPHLSq33H_Y7OTn2r1ljvRgoN4e7iwi23pxrCFPrQQ",
 )
+# 消息末尾附上的日历网页链接：点进去能看到接下来所有人的生日
+CALENDAR_URL = os.environ.get("CALENDAR_URL", ENDPOINT + "/")
 
 # ===== 农历换算（1900-2100 标准数据，与日历网页端一致） =====
 lunarInfo = [0x04bd8,0x04ae0,0x0a570,0x054d5,0x0d260,0x0d950,0x16554,0x056a0,0x09ad0,0x055d2,
@@ -226,7 +229,13 @@ def build_message(due, sent, today):
         return None, None, []
 
     header = "### 🎂 生日提醒 · %s\n**共 %d 位顾客**\n" % (today.strftime("%m月%d日"), len(items))
-    content = header + "\n".join(items)
+    # 末尾附上日历网页链接：点进去能看到接下来所有人的生日
+    footer = (
+        "\n\n---\n"
+        "📅 **完整生日日历**（含接下来所有客户的生日）\n"
+        "[👉 点这里打开](%s)" % CALENDAR_URL
+    )
+    content = header + "\n".join(items) + footer
     return header, content, to_log
 
 
