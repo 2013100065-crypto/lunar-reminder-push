@@ -2,8 +2,13 @@ name: 生日提醒（同步千翕 + 企业微信群推送）
 
 on:
   schedule:
-    # 时间用 UTC 写：UTC 01:00 = 北京时间 09:00
-    - cron: '0 1 * * *'
+    # 时间用 UTC 写，北京时间 = UTC + 8。
+    # 为什么不用整点（00 分）：GitHub 官方说明「每小时开始是高峰期，排队的定时任务会延迟甚至被丢弃」。
+    # 所以故意错开整点，并且排 3 个时间点互为备份。
+    # 发送端有防重机制（push_log 记录 occ_key），第一个成功的会发，后面几次自动跳过，不会重复发。
+    - cron: '7 1 * * *'    # 北京 09:07  ← 主时间
+    - cron: '37 1 * * *'   # 北京 09:37  ← 第一次没跑起来的补发
+    - cron: '7 2 * * *'    # 北京 10:07  ← 再补一次
   push:
     branches: [main]
   workflow_dispatch:
@@ -45,11 +50,12 @@ jobs:
 
       # 第 1 步：把千翕系统里的客户生日同步进日历（新增 / 更正）
       # 用 continue-on-error：同步万一失败，也不影响后面的推送照常发
+      # 只在「主时间点」同步一次；补发时间点只跑推送，省时间也少打扰千翕系统
       - name: 同步千翕客户生日
         id: sync
         continue-on-error: true
         timeout-minutes: 40
-        if: github.event.inputs.skip_sync != 'true'
+        if: github.event.inputs.skip_sync != 'true' && (github.event_name != 'schedule' || github.event.schedule == '7 1 * * *')
         env:
           QX_USER: ${{ secrets.QX_USER }}
           QX_PWD: ${{ secrets.QX_PWD }}
