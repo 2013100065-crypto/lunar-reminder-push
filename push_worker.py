@@ -8,6 +8,7 @@
   2. 计算「今天」命中的提醒（当天 / 提前N天）
   3. 汇总成 1 条消息，通过企业微信群机器人发到指定群
   4. 记录已发送，避免同一天重复推送
+  5. 今天没有顾客过生日时，也发一句「今日没有顾客过生日」，同样一天只发一次
 
 运行环境：GitHub Actions（每天北京时间 09:07 自动跑），也可本地手动跑。
 只依赖 Python 标准库，无需安装任何第三方包。
@@ -239,6 +240,23 @@ def build_message(due, sent, today):
     return header, content, to_log
 
 
+# ===== 今天没有顾客过生日时的通知 =====
+# 需求（2026-10-09 用户提出）：没人过生日也发一句，让群里知道推送没断。
+# 防重复：用 occ_key = "none_2026-10-09" 记进 push_log，同一天只发一次。
+NONE_OCC_KEY = "none_%s"
+
+def build_no_birthday_message(today):
+    """今天没人过生日 → 只发一句简短通知（+ 日历链接）"""
+    header = "### 🎂 生日提醒 · %s\n" % today.strftime("%m月%d日")
+    body = "> 今日没有顾客过生日"
+    footer = (
+        "\n\n---\n"
+        "📅 **完整生日日历**（含接下来所有客户的生日）\n"
+        "[👉 点这里打开](%s)" % CALENDAR_URL
+    )
+    return header + body + footer
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="只打印，不发送、不写记录")
@@ -283,14 +301,21 @@ def main():
             if diff == int(off):
                 due.append((r, d, ly, int(off)))
 
-    if not due:
-        print("今日无命中提醒，不发送。")
-        return
-
-    header, content, to_log = build_message(due, sent, today)
-    if not content:
-        print("今日命中项均已发送过，跳过。")
-        return
+    kind = "birthday"
+    if due:
+        header, content, to_log = build_message(due, sent, today)
+        if not content:
+            print("今日命中项均已发送过，跳过。")
+            return
+    else:
+        # 今天没人过生日 → 也发一句「今日没有顾客过生日」，同一天只发一次
+        kind = "empty"
+        none_key = NONE_OCC_KEY % today.isoformat()
+        if none_key in sent:
+            print("今日命中项均已发送过，跳过。")
+            return
+        content = build_no_birthday_message(today)
+        to_log = [{"reminder_id": 0, "occ_key": none_key}]
 
     if args.dry_run:
         print("[DRY-RUN] 将要发送到企业微信群：")
@@ -305,7 +330,10 @@ def main():
     # 4) 发送
     try:
         wework_send(webhook, content)
-        print("已发送企业微信推送，条数:", len(to_log))
+        if kind == "empty":
+            print("今日没有顾客过生日，已发送通知。")
+        else:
+            print("已发送企业微信推送，条数:", len(to_log))
     except Exception as e:
         print("发送失败:", e); sys.exit(1)
 
